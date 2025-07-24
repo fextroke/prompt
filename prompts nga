@@ -1,17 +1,17 @@
 -- Prevent re-execution
-if getgenv().PromptUIv2 then return end
-getgenv().PromptUIv2 = true
+if getgenv().PromptFixOptimized then return end
+getgenv().PromptFixOptimized = true
 
--- Config
 local RANGE = 10
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 
--- Runtime toggle state
+-- Toggle state
 getgenv().PromptFixEnabled = false
+local activePrompts = {}
 
---== Logic to Fix Prompts ==--
+-- Function to setup prompt
 local function fixPrompt(prompt)
     if not prompt:IsA("ProximityPrompt") then return end
     prompt.HoldDuration = 0
@@ -19,65 +19,66 @@ local function fixPrompt(prompt)
     prompt.MaxActivationDistance = RANGE
 end
 
--- Initial prompt scan
-for _, prompt in pairs(workspace:GetDescendants()) do
-    if prompt:IsA("ProximityPrompt") then
-        fixPrompt(prompt)
-    end
-end
-
--- Watch new prompts
-workspace.DescendantAdded:Connect(function(obj)
-    if obj:IsA("ProximityPrompt") then
-        task.wait(0.2)
-        fixPrompt(obj)
-    end
-end)
-
--- Main heartbeat loop
-RunService.Heartbeat:Connect(function()
-    if not getgenv().PromptFixEnabled then return end
-
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    for _, prompt in pairs(workspace:GetDescendants()) do
-        if prompt:IsA("ProximityPrompt") and prompt.Parent:IsA("BasePart") then
-            local dist = (hrp.Position - prompt.Parent.Position).Magnitude
-            prompt.Enabled = dist <= RANGE
-            if dist <= RANGE then
-                fireproximityprompt(prompt, 1, true)
-            end
+-- Track prompts (once)
+local prompts = {}
+local function scanPrompts()
+    for _, p in pairs(workspace:GetDescendants()) do
+        if p:IsA("ProximityPrompt") and not table.find(prompts, p) then
+            fixPrompt(p)
+            table.insert(prompts, p)
         end
     end
+end
+scanPrompts()
+
+-- Listen for new ones
+workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("ProximityPrompt") then
+        task.wait(0.1)
+        fixPrompt(d)
+        table.insert(prompts, d)
+    end
 end)
 
---== UI Creation ==--
+-- One-tap only nearby prompts loop (lightweight)
+task.spawn(function()
+    while true do
+        if getgenv().PromptFixEnabled then
+            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                for _, prompt in ipairs(prompts) do
+                    if prompt and prompt.Parent and prompt:IsDescendantOf(workspace) then
+                        local dist = (hrp.Position - prompt.Parent.Position).Magnitude
+                        prompt.Enabled = dist <= RANGE
+                        if dist <= RANGE and not activePrompts[prompt] then
+                            fireproximityprompt(prompt, 1, true)
+                            activePrompts[prompt] = true
+                            task.delay(1, function() activePrompts[prompt] = nil end) -- debounce
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
 
--- UI Container
+--== UI ==--
 local gui = Instance.new("ScreenGui", game.CoreGui)
-gui.Name = "NearbyPromptUI"
+gui.Name = "PromptUI"
 gui.ResetOnSpawn = false
 
--- Main Frame
 local frame = Instance.new("Frame", gui)
 frame.Size = UDim2.new(0, 220, 0, 80)
 frame.Position = UDim2.new(0.5, -110, 0.1, 0)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
 frame.BorderSizePixel = 0
 frame.Active = true
 frame.Draggable = true
 
-local corner = Instance.new("UICorner", frame)
-corner.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+Instance.new("UIStroke", frame).Color = Color3.fromRGB(0, 255, 255)
 
-local stroke = Instance.new("UIStroke", frame)
-stroke.Thickness = 2
-stroke.Color = Color3.fromRGB(0, 255, 255)
-stroke.Transparency = 0.15
-
--- Toggle Button
 local toggleBtn = Instance.new("TextButton", frame)
 toggleBtn.Size = UDim2.new(1, 0, 0.5, 0)
 toggleBtn.Position = UDim2.new(0, 0, 0, 0)
@@ -87,7 +88,6 @@ toggleBtn.TextSize = 14
 toggleBtn.Text = "Prompt: OFF"
 toggleBtn.TextColor3 = Color3.fromRGB(200, 255, 255)
 
--- Open/Close Button
 local openCloseBtn = Instance.new("TextButton", frame)
 openCloseBtn.Size = UDim2.new(1, 0, 0.5, 0)
 openCloseBtn.Position = UDim2.new(0, 0, 0.5, 0)
@@ -100,12 +100,10 @@ openCloseBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
 -- Toggle logic
 toggleBtn.MouseButton1Click:Connect(function()
     getgenv().PromptFixEnabled = not getgenv().PromptFixEnabled
-    local isOn = getgenv().PromptFixEnabled
-    toggleBtn.Text = "Prompt: " .. (isOn and "ON" or "OFF")
-    stroke.Color = isOn and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 0, 0)
+    toggleBtn.Text = "Prompt: " .. (getgenv().PromptFixEnabled and "ON" or "OFF")
 end)
 
--- Show/hide logic
+-- Hide/show panel
 local minimized = false
 openCloseBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
@@ -115,7 +113,6 @@ openCloseBtn.MouseButton1Click:Connect(function()
         Enum.EasingStyle.Quad,
         0.3, true
     )
-
     toggleBtn.Visible = not minimized
     openCloseBtn.Text = minimized and "Open UI" or "Close UI"
 end)
